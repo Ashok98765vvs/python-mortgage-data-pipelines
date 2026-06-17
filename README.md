@@ -6,21 +6,50 @@
 ![Great Expectations](https://img.shields.io/badge/Great%20Expectations-FF6B35?style=for-the-badge)
 
 ## Overview
-Enterprise-grade Python data ingestion pipelines connecting **15+ proprietary mortgage systems** to a Snowflake data warehouse. Built with Apache Airflow for orchestration, Great Expectations for data quality, and custom retry/alerting logic for production reliability.
+
+Enterprise-grade Python data ingestion pipelines connecting **15+ proprietary mortgage systems** to a Snowflake data warehouse. Built with Apache Airflow for orchestration, Great Expectations for data quality, and custom retry, observability, and alerting logic for production reliability.
+
+This project demonstrates how to design resilient data pipelines for regulated financial systems where freshness, trust, and operational visibility matter. It emphasizes modular extractors, S3-based staging, automated validation, and scalable warehouse loading patterns.
 
 ## Key Highlights
-- Ingests data from **15+ proprietary mortgage systems** (LOS, servicing, payment processors)
-- Custom Python extractors with **exponential backoff retry** (30s → 60s → 120s)
-- Loads to Snowflake via optimized **S3 staging + COPY INTO** pattern
-- Data quality validation using **Great Expectations** with Slack + PagerDuty alerting
-- Airflow DAGs with **ExternalTaskSensor** for cross-pipeline dependencies
-- Full audit logging and pipeline observability
-- Reduced data latency from 24 hours to **near real-time** (15-minute SLA)
+
+- Ingests data from **15+ proprietary mortgage systems** across LOS, servicing, and payment platforms.
+- Uses custom Python extractors with **exponential backoff retry** for resilient data ingestion.
+- Loads data into Snowflake through an optimized **S3 staging + COPY INTO** pattern.
+- Applies **Great Expectations** checkpoints to prevent bad data from reaching downstream consumers.
+- Uses Airflow DAG dependencies with **ExternalTaskSensor** for cross-pipeline coordination.
+- Includes audit logging, Slack + PagerDuty alerting, and a **15-minute SLA** for freshness.
+
+## Pipeline Architecture
+
+```text
+Mortgage Systems (15+)
+        │
+        ▼
+Python Extractors
+(retry + pagination + audit)
+        │
+        ▼
+AWS S3 Staging Bucket
+        │
+        ▼
+Snowflake COPY INTO
+(bulk load)
+        │
+        ▼
+Great Expectations Validation
+     ┌──────────────┴──────────────┐
+     ▼                             ▼
+dbt / downstream models     Slack + PagerDuty alerts
+```
+
+This design separates extraction, staging, warehouse loading, and validation into distinct layers. That makes the platform easier to scale, test, observe, and extend when new mortgage systems are added.
 
 ## Tech Stack
+
 | Technology | Purpose |
-|-----------|----------|
-| Python 3.10 | Core pipeline logic, extractors, transformers |
+|---|---|
+| Python 3.10 | Core pipeline logic, extractors, and utilities |
 | Apache Airflow 2.7 | Workflow orchestration and scheduling |
 | Snowflake | Cloud data warehouse target |
 | AWS S3 | Intermediate staging layer |
@@ -29,27 +58,28 @@ Enterprise-grade Python data ingestion pipelines connecting **15+ proprietary mo
 | Docker | Containerized Airflow deployment |
 
 ## Project Structure
-```
+
+```text
 python-mortgage-data-pipelines/
 ├── ingestion/
 │   ├── extractors/
-│   │   ├── base_extractor.py        # Abstract base with retry logic
-│   │   ├── los_extractor.py         # Loan Origination System extractor
-│   │   ├── payment_extractor.py     # Payment processor extractor
-│   │   └── servicing_extractor.py   # Loan servicing system extractor
+│   │   ├── base_extractor.py
+│   │   ├── los_extractor.py
+│   │   ├── payment_extractor.py
+│   │   └── servicing_extractor.py
 │   └── loaders/
-│       ├── s3_loader.py             # S3 staging upload
-│       └── snowflake_loader.py      # Snowflake COPY INTO loader
+│       ├── s3_loader.py
+│       └── snowflake_loader.py
 ├── dags/
-│   ├── mortgage_ingestion_dag.py    # Main ingestion DAG
-│   └── dbt_transform_dag.py        # dbt transformation trigger DAG
+│   ├── mortgage_ingestion_dag.py
+│   └── dbt_transform_dag.py
 ├── observability/
-│   ├── great_expectations/          # GE checkpoints and suites
-│   ├── alerting.py                  # Slack + PagerDuty alert helpers
-│   └── audit_logger.py              # Pipeline audit trail
+│   ├── great_expectations/
+│   ├── alerting.py
+│   └── audit_logger.py
 ├── utils/
-│   ├── retry.py                     # Exponential backoff decorator
-│   └── config.py                    # Environment configuration
+│   ├── retry.py
+│   └── config.py
 ├── tests/
 │   ├── test_extractors.py
 │   └── test_loaders.py
@@ -57,38 +87,25 @@ python-mortgage-data-pipelines/
 └── docker-compose.yml
 ```
 
-## Pipeline Architecture
-```
-Mortgage Systems (15+)
-        |
-        v
-Python Extractors (retry + pagination + audit)
-        |
-        v
-AWS S3 Staging Bucket
-        |
-        v
-Snowflake COPY INTO (bulk load)
-        |
-        v
-Great Expectations Validation
-        |
-   Pass / Fail
-    /        \
-  dbt        Slack/PagerDuty Alert
-```
+The structure is organized around clear separation of concerns: extraction, loading, orchestration, observability, and testing. This makes the project easier to maintain and easier to explain in interviews.
 
 ## Core Features
 
 ### Exponential Backoff Retry
+
+The pipeline uses controlled retry logic to handle temporary API or network failures without immediately failing the workflow.
+
 ```python
-@retry(max_attempts=3, backoff_seconds=[30, 60, 120])
+@retry(max_attempts=3, backoff_seconds=)
 def extract_loan_data(system_id: str, date: str) -> pd.DataFrame:
     response = mortgage_api.get_loans(system_id=system_id, date=date)
     return response.to_dataframe()
 ```
 
-### Snowflake S3 COPY INTO
+### Snowflake Bulk Load Pattern
+
+Data is staged in S3 and loaded into Snowflake through `COPY INTO`, which supports scalable warehouse ingestion.
+
 ```python
 def load_to_snowflake(s3_path: str, table: str, schema: str):
     cursor.execute(f"""
@@ -100,27 +117,7 @@ def load_to_snowflake(s3_path: str, table: str, schema: str):
     """)
 ```
 
-### Great Expectations Data Quality
-```python
-expectations = [
-    expect_column_values_to_not_be_null('loan_id'),
-    expect_column_values_to_be_between('loan_amount', 10000, 5000000),
-    expect_column_values_to_match_regex('ssn_hash', r'^[a-f0-9]{64}$'),
-]
-```
+### Data Quality Validation
 
-## Airflow DAG Overview
-- **mortgage_ingestion_dag**: Runs every 15 minutes, extracts from all 15+ systems
-- **dbt_transform_dag**: Triggered after ingestion via ExternalTaskSensor, runs dbt models
-- Both DAGs include Slack notifications on failure with full error context
+Great Expectations is used to validate critical mortgage fields before data moves downstream.
 
-## Results & Impact
-- Reduced data latency from **24 hours to 15 minutes**
-- Achieved **99.9% pipeline uptime** over 6 months production run
-- Onboarded **3 new mortgage systems** without downtime using modular extractor pattern
-- Caught **2,400+ data quality issues** before they reached downstream reports
-
-## Author
-**Ashok Chowdary** | Data Engineer  
-Auburn University Montgomery | OPT Status  
-[LinkedIn](https://linkedin.com/in/ashok98765vvs) | [GitHub](https://github.com/Ashok98765vvs)
